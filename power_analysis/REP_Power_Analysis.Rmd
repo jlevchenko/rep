@@ -1,0 +1,636 @@
+---
+title: "REP Grant Proposal -- Power Analysis Technical Appendix"
+subtitle: "Benchmark Effect Size: Cohen's d = 0.55"
+author: "WCER School Mental Health Collaborative"
+date: "`r format(Sys.time(), '%B %d, %Y')`"
+output:
+  html_notebook:
+    toc: true
+    toc_depth: 3
+    toc_float:
+      collapsed: false
+      smooth_scroll: true
+    number_sections: true
+    df_print: paged
+    theme: flatly
+    highlight: tango
+  html_document:
+    toc: true
+    toc_depth: 3
+    toc_float: true
+    number_sections: true
+    df_print: paged
+    theme: flatly
+    highlight: tango
+    code_folding: show
+    fig_caption: true
+  word_document:
+    toc: true
+    toc_depth: 3
+    number_sections: true
+    fig_caption: true
+fontsize: 11pt
+geometry: margin=1in
+always_allow_html: true
+editor_options:
+  chunk_output_type: inline
+---
+
+## Overview
+
+This notebook reproduces the power analysis for the **Resilience Education Program
+(REP)** randomized controlled trial (RCT), submitted as a technical appendix to a
+NIMH grant proposal. It uses **Cohen's d = 0.55** as the benchmark effect size,
+derived from pilot REP findings.
+
+The analysis provides:
+
+- Analytic estimates of required sample sizes and minimum detectable effects (MDEs)
+- Sensitivity analyses across ICC and R² assumptions
+- Simulation-based power for moderation (Treatment × Moderator interaction) and
+  mediation (indirect effect) models
+- Reproducible environment management via **`renv`**
+
+All computations use **R 4.4.1** with the **pwr**, **simr**, and **mediation**
+packages. All outputs are saved to `figures/`, `tables/`, and `data/`.
+
+> **Data availability:** All analyses use **simulated data** generated within R.
+> No external participant data are required, ensuring full reproducibility from
+> this file alone.
+
+---
+
+## 1. Setup
+
+### 1.1 Reproducibility
+
+```{r reproducibility, message=FALSE, warning=FALSE}
+set.seed(12345)
+R.version.string
+
+if (!requireNamespace("renv", quietly = TRUE)) install.packages("renv")
+if (file.exists("renv.lock")) {
+  suppressMessages(renv::restore(prompt = FALSE))
+} else {
+  suppressMessages(renv::init(bare = TRUE))
+  suppressMessages(renv::snapshot(prompt = FALSE))
+}
+cat("renv environment ready.\n")
+```
+
+### 1.2 Packages
+
+```{r packages, message=FALSE, warning=FALSE}
+pkgs <- c("pwr", "dplyr", "tibble", "tidyr", "purrr", "stringr",
+          "ggplot2", "scales", "readr", "knitr", "lme4", "simr",
+          "mediation", "officer", "flextable", "writexl", "gt", "webshot2")
+
+invisible(lapply(pkgs, function(p) {
+  if (!requireNamespace(p, quietly = TRUE)) install.packages(p, quiet = TRUE)
+}))
+invisible(lapply(pkgs, library, character.only = TRUE))
+
+# Output directories (relative paths -- no hardcoded network drives)
+dir.create("figures", showWarnings = FALSE)
+dir.create("tables",  showWarnings = FALSE)
+dir.create("data",    showWarnings = FALSE)
+
+cat("Packages loaded. Output folders ready.\n")
+```
+
+---
+
+## 2. Helper Functions
+
+Five reusable functions underpin all analytic calculations. Table B0 summarizes
+their purpose and arguments.
+
+```{r helper-table}
+helper_table <- tibble::tibble(
+  Function      = c("design_effect()", "d_adjust()", "required_N()",
+                    "power_at_N()",    "MDE_at_N()"),
+  Description   = c(
+    "Computes the design effect to adjust for clustering.",
+    "Adjusts effect size for covariate-explained variance (R²).",
+    "Computes total required N given effect size, power, and DE.",
+    "Estimates achieved power for fixed N and DE.",
+    "Computes minimum detectable effect for fixed N and target power."
+  ),
+  `Key Arguments` = c("icc, mbar", "d, R2", "d, R2, power, alpha, DE",
+                      "N_total, d, R2, alpha, DE", "N_total, power, R2, alpha, DE"),
+  Output        = c("Design effect multiplier", "Adjusted effect size (dz)",
+                    "Total sample size (N_total)", "Estimated power (p)",
+                    "Minimum detectable effect (MDE)")
+)
+
+knitr::kable(helper_table,
+  caption = "*Table B0.* Summary of helper functions for the REP power analysis.",
+  align   = c("l", "l", "l", "l"))
+```
+
+```{r helper-functions}
+# Global significance level (two-tailed)
+alpha <- 0.05
+
+#' Design effect from ICC and average cluster size.
+design_effect <- function(icc = 0.07, mbar = 9) 1 + (mbar - 1) * icc
+
+#' Adjust Cohen's d for covariate-explained variance R².
+d_adjust <- function(d, R2) d / sqrt(1 - R2)
+
+#' Total sample size for target power, accounting for design effect.
+required_N <- function(d, R2 = 0, power = 0.80, alpha = 0.05, DE = 1.00) {
+  dz      <- d_adjust(d, R2)
+  z_alpha <- qnorm(1 - alpha / 2)
+  z_beta  <- qnorm(power)
+  N_per_group_noDE <- 2 * (z_alpha + z_beta)^2 / dz^2
+  ceiling(DE * N_per_group_noDE)
+}
+
+#' Statistical power at a fixed total N (approximate two-sample formula).
+power_at_N <- function(N_total, d, R2 = 0, alpha = 0.05, DE = 1.00) {
+  dz          <- d_adjust(d, R2)
+  n_per_group <- (N_total / DE) / 2
+  se_d        <- sqrt(2 / n_per_group)
+  pnorm(abs(dz) / se_d - qnorm(1 - alpha / 2))
+}
+
+#' Minimum detectable effect (MDE) at a fixed total N.
+#' N_total already incorporates the design effect; SE is scaled accordingly.
+MDE_at_N <- function(N_total, power = 0.80, R2 = 0, alpha = 0.05, DE = 1.56) {
+  n_per_group <- (N_total / DE) / 2
+  se_d        <- sqrt(2 / n_per_group)
+  dz_star     <- (qnorm(1 - alpha / 2) + qnorm(power)) * se_d
+  dz_star * sqrt(1 - R2)
+}
+```
+
+---
+
+## 3. Required Sample Sizes -- Benchmark Effect
+
+The benchmark effect size **d = 0.55** is derived from pilot REP data. Table B1
+shows the total sample sizes required to achieve **80% power** across combinations
+of covariate adjustment (R²) and clustering (DE).
+
+The design effect **DE = 1.56** reflects an ICC of 0.07 with an average cluster
+size of 9 students (typical for school-based interventions).
+
+```{r required-n-table}
+DE_grid <- c(`No clustering (DE = 1.00)` = 1.00,
+             `Clustered (DE = 1.56)`     = design_effect(icc = 0.07, mbar = 9))
+R2_grid <- c(0.00, 0.30, 0.50)
+
+table_requiredN <- tidyr::expand_grid(R2 = R2_grid, DE_lab = names(DE_grid)) |>
+  dplyr::mutate(
+    DE         = unname(DE_grid[DE_lab]),
+    Required_N = purrr::pmap_dbl(
+      list(0.55, R2, 0.80, alpha, DE),
+      ~ required_N(..1, R2 = ..2, power = ..3, alpha = ..4, DE = ..5)
+    ),
+    Effect = "d = 0.55",
+    Power  = 0.80
+  ) |>
+  dplyr::select(Effect, Power, R2,
+                `Design Effect` = DE_lab,
+                `Required N`    = Required_N)
+
+knitr::kable(
+  table_requiredN,
+  digits      = c(NA, 2, 2, NA, 0),
+  caption     = "*Table B1.* Required total sample sizes (N) to detect d = 0.55 at 80% power under varying R² and clustering conditions.",
+  col.names   = c("Effect", "Power (1–β)", "R²", "Design Effect (DE)", "Required N"),
+  align       = c("l", "c", "c", "c", "c")
+)
+cat("\n*Note.* DE = design effect; R² = proportion of variance explained by covariates.\n")
+```
+
+---
+
+## 4. Sensitivity Analysis -- Planned N = 163
+
+The planned sample size of **N = 163** was selected to accommodate the design
+effect from clustering. This section reports the achieved power and MDE for that
+fixed N across R² levels.
+
+```{r sensitivity-table}
+planned_N  <- 163
+DE_planned <- design_effect(icc = 0.07, mbar = 9)  # 1.56
+
+sensitivity <- tibble::tibble(R2 = R2_grid) |>
+  dplyr::mutate(
+    `Power (1–β)`    = purrr::map_dbl(R2, ~ power_at_N(planned_N, 0.55,
+                                                         R2 = ., DE = DE_planned)),
+    `MDE (Cohen's d)` = purrr::map_dbl(R2, ~ MDE_at_N(planned_N, power = 0.80,
+                                                        R2 = ., DE = DE_planned))
+  )
+
+knitr::kable(
+  sensitivity,
+  digits    = c(2, 2, 2),
+  caption   = "*Table B2.* Estimated power and MDE for N = 163 (DE = 1.56) across R² levels.",
+  col.names = c("R²", "Power (1–β)", "MDE (Cohen's d)"),
+  align     = c("c", "c", "c")
+)
+cat("\n*Note.* MDE = minimum detectable effect; DE = design effect from clustering.\n")
+```
+
+### 4.1 MDE by Sample Size (Table B2 Word Export)
+
+```{r mde-table-export}
+mde_results <- expand.grid(R2 = R2_grid, Sample_Size = c(81, 162)) |>
+  dplyr::arrange(Sample_Size, R2) |>
+  dplyr::mutate(
+    MDE = round(MDE_at_N(Sample_Size, power = 0.80, R2 = R2, DE = 1.56), 2)
+  ) |>
+  dplyr::select(Sample_Size, R2, MDE)
+
+# Export to Word
+word_path <- "tables/Table_B2_MDE.docx"
+doc <- officer::read_docx() |>
+  officer::body_add_par(
+    "Table B2. Minimum Detectable Effect (MDE) by R² and Sample Size (DE = 1.56)",
+    style = "heading 2"
+  ) |>
+  flextable::body_add_flextable(
+    flextable::autofit(flextable::qflextable(mde_results))
+  ) |>
+  officer::body_add_par(
+    "*Note.* MDE = Minimum Detectable Effect. DE = 1.56.",
+    style = "Normal"
+  )
+print(doc, target = word_path)
+cat("Saved:", word_path, "\n")
+```
+
+---
+
+## 5. Simulation -- Moderation Power
+
+This section estimates power to detect a **Treatment × Moderator interaction**
+using a multilevel model via the `simr` package. Students are nested within
+schools (random intercepts); ICC ≈ 0.07.
+
+**Parameters:** Treatment effect (β = 0.40), interaction effect (β = 0.55),
+baseline covariate (β = 0.50), N = 163 across 20 schools.
+
+```{r moderation-sim, message=FALSE, warning=FALSE}
+set.seed(1234)
+
+# --- Design parameters ---
+n_schools    <- 20
+m_per_school <- round(planned_N / n_schools)
+b_treat      <- 0.40
+b_intx       <- 0.55
+b_pre        <- 0.50
+sigma_school <- 0.30
+sigma_eps    <- 1.08
+icc_empirical <- sigma_school^2 / (sigma_school^2 + sigma_eps^2)
+
+# --- Simulate clustered dataset ---
+school <- factor(rep(1:n_schools, each = m_per_school))
+treat  <- rbinom(length(school), 1, 0.5)
+mod    <- rbinom(length(school), 1, 0.5)
+pre    <- rnorm(length(school))
+u0     <- rnorm(n_schools, 0, sigma_school)
+y      <- u0[as.integer(school)] +
+          b_treat * treat + b_intx * (treat * mod) + b_pre * pre +
+          rnorm(length(school), 0, sigma_eps)
+dat    <- data.frame(y, treat = factor(treat), mod = factor(mod), pre, school)
+
+# --- Fit multilevel model ---
+m0 <- suppressWarnings(
+  lme4::lmer(y ~ treat * mod + pre + (1 | school), data = dat,
+             control = lme4::lmerControl(check.conv.singular = "ignore"))
+)
+
+# --- Monte Carlo power simulation ---
+m0_sim <- simr::makeLmer(
+  y ~ treat * mod + pre + (1 | school),
+  lme4::fixef(m0), lme4::VarCorr(m0), data = dat
+)
+
+pow_mod <- suppressWarnings(
+  simr::powerSim(m0_sim, test = simr::fixed("treat1:mod1", "t"),
+                 nsim = 200, progress = FALSE)
+)
+
+# --- Extract power estimate ---
+extract_val <- function(pattern, text, div = 1) {
+  m <- regexec(pattern, text, perl = TRUE)
+  r <- regmatches(text, m)
+  if (length(r) && length(r[[1]]) >= 2) as.numeric(r[[1]][2]) / div else NA_real_
+}
+txt       <- paste(capture.output(print(pow_mod)), collapse = " ")
+est_power <- extract_val("Power\\s*=\\s*([0-9.]+)\\s*%", txt, 100)
+if (is.na(est_power)) est_power <- mean(pow_mod$pval < 0.05, na.rm = TRUE)
+
+se_power <- sqrt(est_power * (1 - est_power) / 200)
+ci_low   <- max(0, est_power - 1.96 * se_power)
+ci_high  <- min(1, est_power + 1.96 * se_power)
+
+# --- Table B3 ---
+power_summary <- data.frame(
+  `Fixed Effect`          = "Treatment × Moderator",
+  `ICC`                   = round(icc_empirical, 2),
+  `Simulations`           = 200,
+  `Estimated Power (1–β)` = round(est_power, 2),
+  `SE`                    = round(se_power, 3),
+  `95% CI Lower`          = round(ci_low, 2),
+  `95% CI Upper`          = round(ci_high, 2),
+  check.names = FALSE
+)
+
+knitr::kable(
+  power_summary,
+  caption = "*Table B3.* Estimated power for the Treatment × Moderator interaction (N = 163; DE = 1.56; ICC ≈ 0.07; 200 simulations).",
+  align   = c("l", "c", "c", "c", "c", "c", "c"),
+  digits  = 2
+)
+cat("\n*Note.* Power estimated via Monte Carlo simulation (simr::powerSim).\n")
+```
+
+### 5.1 Power Curves -- Schools and Within-Cell
+
+```{r power-curves, message=FALSE, warning=FALSE}
+set.seed(1234)
+simr::simrOptions(progress = FALSE)
+
+int_term <- if ("treat1:mod1" %in% names(lme4::fixef(m0))) "treat1:mod1" else "treat:mod"
+
+# Helper: coerce powerCurve to data.frame robustly
+pc_to_df <- function(pc) {
+  df <- tryCatch(as.data.frame(pc), error = \(e) NULL)
+  if (!is.null(df)) return(df)
+  df <- tryCatch(as.data.frame(summary(pc)), error = \(e) NULL)
+  if (!is.null(df)) return(df)
+  sn  <- methods::slotNames(pc)
+  out <- lapply(c("x","y","lwr","upr","n"), \(nm) if (nm %in% sn) methods::slot(pc, nm))
+  as.data.frame(Filter(Negate(is.null), setNames(out, c("x","y","lwr","upr","n")[
+    vapply(c("x","y","lwr","upr","n"), \(nm) nm %in% sn, logical(1))])))
+}
+
+# Curve A: vary number of schools
+breaks_sch     <- c(8, 10, 12, 14, 16, 18, 20, 24, 28, 32)
+m_extended     <- simr::extend(m0, along = "school", n = max(breaks_sch))
+pc_school      <- simr::powerCurve(m_extended, test = simr::fixed(int_term, "t"),
+                                   along = "school", breaks = breaks_sch, nsim = 200)
+pc_school_tbl  <- pc_to_df(pc_school)
+
+# Curve B: vary students per within-cell
+breaks_within  <- c(5, 7, 9, 11, 13, 15, 18, 20)
+m_20schools    <- simr::extend(m0, along = "school", n = 20)
+pc_within      <- simr::powerCurve(m_20schools, test = simr::fixed(int_term, "t"),
+                                   within = "school+treat+mod",
+                                   breaks = breaks_within, nsim = 200)
+pc_within_tbl  <- pc_to_df(pc_within)
+
+# Curve C: LRT (drop the interaction)
+pc_lrt         <- simr::powerCurve(m_extended,
+                                   test   = simr::fcompare(y ~ treat + mod + pre + (1 | school)),
+                                   along  = "school", breaks = breaks_sch, nsim = 200)
+pc_lrt_tbl     <- pc_to_df(pc_lrt)
+
+# Export CSVs
+write.csv(pc_school_tbl, "data/PowerCurve_Schools.csv",     row.names = FALSE)
+write.csv(pc_within_tbl, "data/PowerCurve_Within.csv",      row.names = FALSE)
+write.csv(pc_lrt_tbl,    "data/PowerCurve_Schools_LRT.csv", row.names = FALSE)
+cat("Power curve CSVs saved to data/\n")
+```
+
+### 5.2 Power Curve Plots
+
+```{r power-curve-plots, fig.width=7.5, fig.height=5}
+# Helper to standardize column names across simr versions
+prep_pc <- function(tbl, x_col) {
+  names(tbl)[1] <- x_col
+  tbl |>
+    dplyr::mutate(
+      power = dplyr::coalesce(
+        if ("mean"  %in% names(tbl)) tbl[["mean"]]  else NULL,
+        if ("y"     %in% names(tbl)) tbl[["y"]]     else NULL
+      ),
+      lwr = dplyr::coalesce(
+        if ("lower" %in% names(tbl)) tbl[["lower"]] else NULL,
+        if ("lwr"   %in% names(tbl)) tbl[["lwr"]]   else NULL
+      ),
+      upr = dplyr::coalesce(
+        if ("upper" %in% names(tbl)) tbl[["upper"]] else NULL,
+        if ("upr"   %in% names(tbl)) tbl[["upr"]]   else NULL
+      )
+    )
+}
+
+df_school <- prep_pc(pc_school_tbl, "num_schools")
+df_within <- prep_pc(pc_within_tbl, "students_per_cell")
+
+# Plot A: Power vs Number of Schools
+p_school <- ggplot(df_school, aes(x = num_schools, y = power)) +
+  geom_ribbon(aes(ymin = lwr, ymax = upr), fill = "#4F81BD", alpha = 0.2) +
+  geom_line(color = "#1F497D", linewidth = 1.2) +
+  geom_point(size = 2.5, color = "#1F497D") +
+  geom_hline(yintercept = 0.80, linetype = "dashed", color = "gray50") +
+  geom_hline(yintercept = 0.90, linetype = "dotted", color = "gray50") +
+  scale_y_continuous(labels = scales::percent_format(accuracy = 1), limits = c(0, 1)) +
+  labs(
+    title    = "Power vs. Number of Schools (Treatment × Moderator Interaction)",
+    subtitle = "95% Monte Carlo CI shaded; dashed = 80% power, dotted = 90% power",
+    x        = "Number of Schools",
+    y        = "Estimated Power (1 − β)"
+  ) +
+  theme_bw(base_size = 13) +
+  theme(panel.grid.minor  = element_blank(),
+        panel.border      = element_rect(color = "black", fill = NA),
+        plot.title        = element_text(face = "bold"),
+        plot.background   = element_rect(fill = "white", color = NA),
+        panel.background  = element_rect(fill = "white", color = NA))
+
+ggsave("figures/PowerCurve_Schools_Workshop_White.png",
+       p_school, width = 7.5, height = 5, dpi = 300)
+print(p_school)
+
+# Plot B: Power vs Students per Cell
+p_within <- ggplot(df_within, aes(x = students_per_cell, y = power)) +
+  geom_ribbon(aes(ymin = lwr, ymax = upr), fill = "#C55A11", alpha = 0.2) +
+  geom_line(color = "#843C0C", linewidth = 1.2) +
+  geom_point(size = 2.5, color = "#843C0C") +
+  geom_hline(yintercept = 0.80, linetype = "dashed", color = "gray50") +
+  geom_hline(yintercept = 0.90, linetype = "dotted", color = "gray50") +
+  scale_y_continuous(labels = scales::percent_format(accuracy = 1), limits = c(0, 1)) +
+  labs(
+    title    = "Power vs. Students per School × Treatment × Moderator Cell",
+    subtitle = "95% Monte Carlo CI shaded; dashed = 80% power, dotted = 90% power",
+    x        = "Students per School × Treatment × Moderator Cell",
+    y        = "Estimated Power (1 − β)"
+  ) +
+  theme_bw(base_size = 13) +
+  theme(panel.grid.minor  = element_blank(),
+        panel.border      = element_rect(color = "black", fill = NA),
+        plot.title        = element_text(face = "bold"),
+        plot.background   = element_rect(fill = "white", color = NA),
+        panel.background  = element_rect(fill = "white", color = NA))
+
+ggsave("figures/PowerCurve_Within_Workshop_White.png",
+       p_within, width = 7.5, height = 5, dpi = 300)
+print(p_within)
+cat("Power curve figures saved to figures/\n")
+```
+
+---
+
+## 6. Simulation -- Mediation Power
+
+This section estimates power to detect the **indirect (mediated) effect** via
+bootstrap mediation analysis using the `mediation` package.
+
+**Model:** Treatment → Mediator (a = 0.30) → Outcome (b = 0.35), with direct
+effect c′ = 0.10. Power is the proportion of 300 replications in which the 95%
+bootstrap CI for the indirect effect (a × b = 0.105) excludes zero.
+
+```{r mediation-sim, message=FALSE, warning=FALSE}
+set.seed(1234)
+
+nsim_med  <- 300
+boot_reps <- 1000
+a_path    <- 0.30
+b_path    <- 0.35
+c_prime   <- 0.10
+
+# Single mediation run: returns 1 if indirect effect CI excludes zero
+sim_one_med <- function(N = planned_N) {
+  Tt  <- rbinom(N, 1, 0.5)
+  M   <- a_path * Tt + rnorm(N)
+  Y   <- c_prime * Tt + b_path * M + rnorm(N)
+  d   <- data.frame(Y, M, T = Tt)
+  fit.M <- lm(M ~ T, data = d)
+  fit.Y <- lm(Y ~ T + M, data = d)
+  med   <- mediation::mediate(fit.M, fit.Y, treat = "T", mediator = "M",
+                               boot = TRUE, sims = boot_reps)
+  ci <- med$d0.ci
+  as.numeric(!(ci[1] <= 0 & ci[2] >= 0))
+}
+
+res       <- replicate(nsim_med, sim_one_med())
+power_med <- mean(res)
+
+# Table B4
+med_summary <- data.frame(
+  `Path a`               = a_path,
+  `Path b`               = b_path,
+  `Indirect Effect (a×b)`= round(a_path * b_path, 3),
+  `Direct Effect (c′)`   = c_prime,
+  `Simulations`          = nsim_med,
+  `Bootstraps`           = boot_reps,
+  `Estimated Power (1–β)`= round(power_med, 2),
+  check.names = FALSE
+)
+
+knitr::kable(
+  med_summary,
+  caption = "*Table B4.* Estimated power to detect the indirect effect via bootstrapped mediation analysis (N = 163; 300 simulations; 1,000 bootstraps per run).",
+  align   = c("c","c","c","c","c","c","c"),
+  digits  = 2
+)
+cat("\n*Note.* Power = proportion of simulations where the 95% bootstrap CI excludes zero.\n")
+```
+
+---
+
+## 7. Analytic Power Curve
+
+```{r analytic-power-curve, fig.width=8, fig.height=5.5}
+n_eff      <- planned_N / DE_planned
+n_per_grp  <- n_eff / 2
+d_vals     <- seq(0.20, 0.90, by = 0.01)
+
+power_vals <- sapply(d_vals, \(d)
+  pwr::pwr.t.test(n = n_per_grp, d = d, sig.level = alpha,
+                  type = "two.sample", alternative = "two.sided")$power)
+
+df_curve <- data.frame(d = d_vals, power = power_vals)
+bm_power <- df_curve$power[which.min(abs(df_curve$d - 0.55))]
+
+ggplot(df_curve, aes(x = d, y = power)) +
+  geom_line(color = "#1F497D", linewidth = 1.2) +
+  geom_point(aes(x = 0.55, y = bm_power), color = "#1F497D", size = 3) +
+  geom_hline(yintercept = 0.80, linetype = "dashed", color = "gray40") +
+  geom_vline(xintercept = 0.55, linetype = "dashed", color = "#1F497D", alpha = 0.6) +
+  annotate("text", x = 0.57, y = 0.10,
+           label = paste0("d = 0.55\nPower = ", round(bm_power, 2)),
+           hjust = 0, size = 3.5, color = "#1F497D") +
+  scale_y_continuous(labels = scales::percent_format(accuracy = 1), limits = c(0, 1)) +
+  labs(
+    title    = "Analytic Power Curve -- Two-Sample t-Test",
+    subtitle = paste0("N = ", planned_N, "; DE = ", DE_planned,
+                      "; Effective N ≈ ", round(n_eff)),
+    x        = "Standardized Effect Size (Cohen's d)",
+    y        = "Statistical Power (1 − β)",
+    caption  = paste0(
+      "Dashed lines mark 80% power and the benchmark effect size (d = 0.55).\n",
+      "Effective sample size accounts for clustering (Design Effect = ", DE_planned, ")."
+    )
+  ) +
+  theme_bw(base_size = 13) +
+  theme(panel.grid.minor = element_blank(),
+        panel.border     = element_rect(color = "black", fill = NA),
+        plot.title       = element_text(face = "bold", size = 12),
+        plot.caption     = element_text(hjust = 0, size = 10,
+                                        margin = margin(t = 10)))
+```
+
+---
+
+## 8. Export All Tables
+
+```{r export-all-tables}
+tables <- list(
+  list(name = "Table_B0_Helper_Functions",
+       df   = helper_table,
+       cap  = "Table B0. Summary of Helper Functions for Power Analysis"),
+  list(name = "Table_B1_RequiredN_Benchmark",
+       df   = table_requiredN,
+       cap  = "Table B1. Required N for d = 0.55 at 80% Power"),
+  list(name = "Table_B2_Sensitivity_Analysis",
+       df   = sensitivity,
+       cap  = "Table B2. Power and MDE for N = 163, DE = 1.56"),
+  list(name = "Table_B3_Moderation_Power",
+       df   = power_summary,
+       cap  = "Table B3. Moderation Power (Treatment × Moderator, N = 163)"),
+  list(name = "Table_B4_Mediation_Power",
+       df   = med_summary,
+       cap  = "Table B4. Mediation Power (N = 163, 300 simulations)")
+)
+
+# Word (.docx)
+doc <- officer::read_docx()
+for (tb in tables) {
+  doc <- officer::body_add_par(doc, tb$cap, style = "heading 2") |>
+    flextable::body_add_flextable(flextable::autofit(flextable::qflextable(tb$df))) |>
+    officer::body_add_par("")
+}
+print(doc, target = "tables/REP_Power_Tables.docx")
+
+# Excel (.xlsx)
+sheets <- stats::setNames(lapply(tables, `[[`, "df"),
+                          sapply(tables, `[[`, "name"))
+writexl::write_xlsx(sheets, path = "tables/REP_Power_Tables.xlsx")
+
+# PNGs via gt
+for (tb in tables) {
+  gt::gt(tb$df) |>
+    gt::tab_header(title = tb$cap) |>
+    gt::gtsave(filename = file.path("figures", paste0(tb$name, ".png")))
+}
+
+cat("All tables exported to tables/ and figures/\n")
+```
+
+---
+
+## 9. Session Info
+
+```{r session-info}
+cat("Last run:", format(Sys.time(), "%Y-%m-%d %H:%M:%S %Z"), "\n\n")
+sessionInfo()
+if (requireNamespace("renv", quietly = TRUE)) suppressMessages(renv::status())
+```
