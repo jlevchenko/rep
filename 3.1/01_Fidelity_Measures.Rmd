@@ -1,0 +1,480 @@
+---
+title: "REP 3.1 Fidelity Measures"
+author: "WCER School Mental Health Collaborative"
+date: "`r format(Sys.time(), '%B %d, %Y')`"
+output:
+  html_notebook:
+    df_print: paged
+    highlight: tango
+    number_sections: yes
+    theme: flatly
+    toc: yes
+    toc_float:
+      collapsed: no
+      smooth_scroll: yes
+  html_document:
+    df_print: paged
+    highlight: tango
+    number_sections: yes
+    theme: flatly
+    toc: yes
+    toc_float: yes
+---
+
+## Overview
+
+This notebook computes fidelity metrics for three REP 3.1 intervention components:
+**CICO** (Check-In Check-Out, across AM / Daytime / PM delivery formats),
+**CBI** (Curriculum-Based Instruction), and **RF** (Resilient Families, across
+three meeting protocols).
+
+For each component, the notebook calculates adherence and quality percentages,
+standard deviations, and min/max values per fidelity item, as well as program-wide
+overall scores. A parallel exposure analysis computes the proportion of total
+observation opportunities that were actually observed.
+
+> **Note on data:** School names and all implementer/observer names have been
+> anonymized. Schools are coded School_A through School_E. Implementers and
+> observers are coded Implementer_A/B/... and Observer_A/B/... using a consistent
+> mapping dictionary applied to the source data.
+
+---
+
+## 1. Setup
+
+```{r setup, message=FALSE, warning=FALSE}
+packages <- c("readxl", "tidyverse", "writexl", "purrr")
+new_packages <- setdiff(packages, installed.packages()[, "Package"])
+if (length(new_packages)) install.packages(new_packages, quiet = TRUE)
+invisible(lapply(packages, library, character.only = TRUE))
+
+excel_file <- "data/REP2_Synthetic.xlsx"
+```
+
+---
+
+## 2. Load Data
+
+### 2.1 CICO
+
+Sheet names use anonymized school codes (School_A through School_E).
+
+```{r load-cico, warning=FALSE}
+# Column selections per delivery format
+columns_cico_am <- c(1, 4, 8, 9:13, 17:29)
+columns_cico_dt <- c(1, 4, 8:20)
+columns_cico_pm <- c(1, 4, 8:26)
+
+sheet_names_am <- c("School_A AM", "School_B AM", "School_C AM",
+                    "School_D AM", "School_E AM")
+sheet_names_dt <- c("School_A DT", "School_B DT", "School_C DT",
+                    "School_D DT", "School_E DT")
+sheet_names_pm <- c("School_A PM", "School_B PM", "School_C PM",
+                    "School_D PM", "School_E PM")
+
+# Shared import function: select columns, recode Yes/No/NA, drop all-NA rows
+read_cico_sheet <- function(sheet_name, columns_to_select) {
+  read_excel(excel_file, sheet = sheet_name) |>
+    select(all_of(columns_to_select)) |>
+    mutate(across(everything(), as.character)) |>
+    mutate(across(everything(), ~ case_when(
+      . == "Yes (1)"            ~ "1",
+      . == "No (0)"             ~ "0",
+      . %in% c("N/A", "n/a")   ~ NA_character_,
+      TRUE                      ~ .
+    ))) |>
+    filter(!if_all(everything(), is.na))
+}
+
+cico_am <- bind_rows(lapply(sheet_names_am, read_cico_sheet,
+                             columns_to_select = columns_cico_am))
+cico_dt <- bind_rows(lapply(sheet_names_dt, read_cico_sheet,
+                             columns_to_select = columns_cico_dt))
+cico_pm <- bind_rows(lapply(sheet_names_pm, read_cico_sheet,
+                             columns_to_select = columns_cico_pm))
+
+cat("CICO rows -- AM:", nrow(cico_am), "| DT:", nrow(cico_dt),
+    "| PM:", nrow(cico_pm), "\n")
+```
+
+### 2.2 CBI
+
+```{r load-cbi}
+cbi <- read_excel(excel_file, sheet = "CBI Lessons") |>
+  slice(-1) |>                   # drop label row
+  select(1, 4:58) |>
+  mutate(across(2:last_col(), ~ {
+    . <- gsub("Yes \\(1\\)", "1", .)
+    . <- gsub("No \\(0\\)",  "0", .)
+    suppressWarnings(as.numeric(.))
+  }))
+
+# Recode school name column to anonymized labels
+cbi <- cbi |>
+  mutate(across(1, ~ recode(.,
+    "Blackhawk"                  = "School_A",
+    "Blackhawk Middle School"    = "School_A",
+    "Black Hawk"                 = "School_A",
+    "Olson Elementary"           = "School_C",
+    "Spring Harbor Middle School"= "School_E",
+    "Spring Harbor"              = "School_E",
+    "Gompers"                    = "School_B",
+    "Schenk"                     = "School_D"
+  )))
+
+cat("CBI rows:", nrow(cbi), "\n")
+```
+
+### 2.3 RF
+
+```{r load-rf, warning=FALSE}
+read_rf_sheet <- function(sheet_name) {
+  read_excel(excel_file, sheet = sheet_name) |>
+    slice(-1) |>
+    mutate(across(everything(), as.character)) |>
+    mutate(across(everything(), ~ case_when(
+      . == "Yes (1)"            ~ "1",
+      . == "No (0)"             ~ "0",
+      . %in% c("N/A", "n/a")   ~ NA_character_,
+      TRUE                      ~ .
+    ))) |>
+    filter(!if_all(everything(), is.na))
+}
+
+rf_meeting_1 <- read_rf_sheet("RF Meeting 1")
+rf_meeting_2 <- read_rf_sheet("RF Meeting 2")
+rf_meeting_3 <- read_rf_sheet("RF Meeting 3") |>
+  select(-last_col())    # drop trailing empty column
+
+cat("RF rows -- M1:", nrow(rf_meeting_1), "| M2:", nrow(rf_meeting_2),
+    "| M3:", nrow(rf_meeting_3), "\n")
+```
+
+---
+
+## 3. Fidelity Metrics
+
+A single shared function handles all metric calculations. Adherence and quality
+items are identified by column name prefix (`S` = adherence steps, `Q` = quality
+indicators). For RF, all columns are treated as adherence items.
+
+```{r metrics-function}
+#' Calculate per-column and overall fidelity metrics.
+#' @param data        Data frame of numeric fidelity items (0/1/NA).
+#' @param n_total     Total observation opportunities (typically nrow of the
+#'                    full dataset before any column selection).
+#' @param adj_cols    Optional named list: column names -> integer adjustments
+#'                    to subtract from n_total (for items with fewer opportunities).
+#' @param label       String label added to the final tibble.
+calculate_fidelity <- function(data, n_total, adj_cols = list(), label = "") {
+  data <- data |> mutate(across(everything(), ~ suppressWarnings(as.numeric(.))))
+
+  adjusted_n <- sapply(colnames(data), function(cn) {
+    adj <- adj_cols[[cn]]
+    as.integer(n_total - if (!is.null(adj)) adj else 0L)
+  })
+
+  per_col <- tibble(
+    Item              = colnames(data),
+    N_Opportunities   = adjusted_n,
+    N_Observed        = map_int(data, ~ sum(!is.na(.))),
+    Pct_Adherence_Obs = map_dbl(data, ~ mean(. == 1, na.rm = TRUE) * 100),
+    Pct_Adherence_Tot = map2_dbl(data, adjusted_n,
+                                 ~ sum(.x == 1, na.rm = TRUE) / .y * 100),
+    SD                = map_dbl(data, ~ sd(., na.rm = TRUE)),
+    Min               = map_dbl(data, ~ min(., na.rm = TRUE)),
+    Max               = map_dbl(data, ~ max(., na.rm = TRUE)),
+    Label             = label
+  )
+
+  overall <- per_col |>
+    summarise(
+      Item              = paste("Overall", label),
+      N_Opportunities   = sum(N_Opportunities),
+      N_Observed        = sum(N_Observed),
+      Pct_Adherence_Obs = mean(Pct_Adherence_Obs, na.rm = TRUE),
+      Pct_Adherence_Tot = mean(Pct_Adherence_Tot, na.rm = TRUE),
+      SD                = mean(SD, na.rm = TRUE),
+      Min               = min(Min, na.rm = TRUE),
+      Max               = max(Max, na.rm = TRUE),
+      Label             = label
+    )
+
+  bind_rows(per_col, overall)
+}
+```
+
+### 3.1 CICO -- AM
+
+```{r cico-am-metrics}
+adh_am <- cico_am |> select(starts_with("S")) |>
+  mutate(across(everything(), ~ suppressWarnings(as.numeric(.))))
+qua_am <- cico_am |> select(starts_with("Q")) |>
+  mutate(across(everything(), ~ suppressWarnings(as.numeric(.))))
+
+# Columns 5-17 have 3 fewer opportunities; columns 18-19 have 12 fewer
+col_names_am <- colnames(adh_am)
+adj_am <- setNames(
+  c(rep(3L, length(col_names_am[5:min(17, length(col_names_am))])),
+    rep(12L, length(col_names_am[18:min(19, length(col_names_am))]))),
+  c(col_names_am[5:min(17, length(col_names_am))],
+    col_names_am[18:min(19, length(col_names_am))])
+)
+
+final_cico_am <- bind_rows(
+  calculate_fidelity(adh_am, nrow(cico_am), adj_cols = adj_am, label = "Adherence"),
+  calculate_fidelity(qua_am, nrow(cico_am), label = "Quality")
+)
+print(final_cico_am)
+```
+
+### 3.2 CICO -- Daytime
+
+```{r cico-dt-metrics}
+adh_dt <- cico_dt |> select(starts_with("S")) |>
+  mutate(across(everything(), ~ suppressWarnings(as.numeric(.))))
+qua_dt <- cico_dt |> select(starts_with("Q")) |>
+  mutate(across(everything(), ~ suppressWarnings(as.numeric(.))))
+
+# First 5 adherence columns have 9 fewer opportunities
+adj_dt <- setNames(rep(9L, min(5, ncol(adh_dt))),
+                   colnames(adh_dt)[1:min(5, ncol(adh_dt))])
+
+final_cico_dt <- bind_rows(
+  calculate_fidelity(adh_dt, nrow(cico_dt), adj_cols = adj_dt, label = "Adherence"),
+  calculate_fidelity(qua_dt, nrow(cico_dt), label = "Quality")
+)
+print(final_cico_dt)
+```
+
+### 3.3 CICO -- PM
+
+```{r cico-pm-metrics}
+adh_pm <- cico_pm |> select(starts_with("S")) |>
+  mutate(across(everything(), ~ suppressWarnings(as.numeric(.))))
+qua_pm <- cico_pm |> select(starts_with("Q")) |>
+  mutate(across(everything(), ~ suppressWarnings(as.numeric(.))))
+
+# Columns 4-19 have 2 fewer opportunities
+col_names_pm <- colnames(adh_pm)
+adj_pm <- setNames(rep(2L, length(col_names_pm[4:min(19, length(col_names_pm))])),
+                   col_names_pm[4:min(19, length(col_names_pm))])
+
+final_cico_pm <- bind_rows(
+  calculate_fidelity(adh_pm, nrow(cico_pm), adj_cols = adj_pm, label = "Adherence"),
+  calculate_fidelity(qua_pm, nrow(cico_pm), label = "Quality")
+)
+print(final_cico_pm)
+```
+
+### 3.4 CICO Overall Summary
+
+```{r cico-summary}
+bind_rows(
+  final_cico_am |> filter(startsWith(Item, "Overall")) |> mutate(Format = "AM"),
+  final_cico_dt |> filter(startsWith(Item, "Overall")) |> mutate(Format = "DT"),
+  final_cico_pm |> filter(startsWith(Item, "Overall")) |> mutate(Format = "PM")
+)
+```
+
+### 3.5 CBI
+
+```{r cbi-metrics}
+adh_cbi <- cbi |> select(starts_with("S")) |>
+  mutate(across(everything(), ~ suppressWarnings(as.numeric(.))))
+qua_cbi <- cbi |> select(starts_with("Q")) |>
+  select(-any_of("Q3")) |>       # Q3 is the school label column, not a fidelity item
+  mutate(across(everything(), ~ suppressWarnings(as.numeric(.))))
+
+final_cbi <- bind_rows(
+  calculate_fidelity(adh_cbi, nrow(cbi), label = "Adherence"),
+  calculate_fidelity(qua_cbi, nrow(cbi), label = "Quality")
+)
+print(final_cbi)
+```
+
+### 3.6 RF -- Meetings 1, 2, 3
+
+```{r rf-metrics}
+final_rf_1 <- calculate_fidelity(
+  rf_meeting_1 |> mutate(across(everything(), ~ suppressWarnings(as.numeric(.)))),
+  nrow(rf_meeting_1), label = "Adherence"
+)
+
+final_rf_2 <- calculate_fidelity(
+  rf_meeting_2 |> mutate(across(everything(), ~ suppressWarnings(as.numeric(.)))),
+  nrow(rf_meeting_2), label = "Adherence"
+)
+
+final_rf_3 <- calculate_fidelity(
+  rf_meeting_3 |> mutate(across(everything(), ~ suppressWarnings(as.numeric(.)))),
+  nrow(rf_meeting_3), label = "Adherence"
+)
+
+# Overall RF summary
+bind_rows(
+  final_rf_1 |> filter(startsWith(Item, "Overall")) |> mutate(Meeting = "RF Meeting 1"),
+  final_rf_2 |> filter(startsWith(Item, "Overall")) |> mutate(Meeting = "RF Meeting 2"),
+  final_rf_3 |> filter(startsWith(Item, "Overall")) |> mutate(Meeting = "RF Meeting 3")
+)
+```
+
+---
+
+## 4. Exposure Analysis
+
+Exposure quantifies the proportion of total observation opportunities that were
+actually covered (non-NA) for each student-school combination.
+
+```{r exposure-function}
+#' Compute exposure percentages by grouping variable.
+#' @param data       Data frame.
+#' @param item_cols  Character vector of column names to include.
+#' @param group_col  Optional grouping column name (NULL = overall only).
+compute_exposure <- function(data, item_cols, group_col = NULL) {
+  df <- data |>
+    rowwise() |>
+    mutate(
+      total = length(c_across(all_of(item_cols))),
+      observed = sum(!is.na(c_across(all_of(item_cols))))
+    ) |>
+    ungroup()
+
+  if (!is.null(group_col)) {
+    df <- df |>
+      group_by(across(all_of(group_col))) |>
+      summarise(
+        total_potential = sum(total),
+        observed_exposures = sum(observed),
+        exposure_pct = observed_exposures / total_potential * 100,
+        .groups = "drop"
+      ) |>
+      filter(total_potential > 0)
+  } else {
+    df <- df |>
+      summarise(
+        total_potential = sum(total),
+        observed_exposures = sum(observed),
+        exposure_pct = observed_exposures / total_potential * 100
+      )
+  }
+  df
+}
+```
+
+### 4.1 CICO Exposure
+
+```{r cico-exposure}
+cico_items <- function(df) grep("^(S|Q)", names(df), value = TRUE)
+
+# Student-level (grouped by anonymized Student Name + School)
+exp_am_student <- compute_exposure(cico_am, cico_items(cico_am),
+                                   group_col = c("Student Name", "School"))
+exp_dt_student <- compute_exposure(cico_dt, cico_items(cico_dt),
+                                   group_col = c("Student Name", "School"))
+exp_pm_student <- compute_exposure(cico_pm, cico_items(cico_pm),
+                                   group_col = c("Student Name", "School"))
+
+# Overall per format
+overall_am <- compute_exposure(cico_am, cico_items(cico_am))
+overall_dt <- compute_exposure(cico_dt, cico_items(cico_dt))
+overall_pm <- compute_exposure(cico_pm, cico_items(cico_pm))
+
+# Combined CICO overall
+cico_overall <- bind_rows(overall_am, overall_dt, overall_pm) |>
+  summarise(
+    total_potential    = sum(total_potential),
+    observed_exposures = sum(observed_exposures),
+    exposure_pct       = observed_exposures / total_potential * 100
+  )
+cat("CICO overall exposure:", round(cico_overall$exposure_pct, 1), "%\n")
+```
+
+### 4.2 CBI Exposure
+
+```{r cbi-exposure}
+cbi_items <- setdiff(grep("^(S|Q)", names(cbi), value = TRUE), "Q3")
+exp_cbi_school  <- compute_exposure(cbi, cbi_items, group_col = "Q3")
+overall_cbi     <- compute_exposure(cbi, cbi_items)
+cat("CBI overall exposure:", round(overall_cbi$exposure_pct, 1), "%\n")
+print(exp_cbi_school)
+```
+
+### 4.3 RF Exposure
+
+```{r rf-exposure}
+rf_overall_1 <- compute_exposure(rf_meeting_1, names(rf_meeting_1))
+rf_overall_2 <- compute_exposure(rf_meeting_2, names(rf_meeting_2))
+rf_overall_3 <- compute_exposure(rf_meeting_3, names(rf_meeting_3))
+
+aggregated_rf <- bind_rows(rf_overall_1, rf_overall_2, rf_overall_3) |>
+  summarise(
+    total_potential    = sum(total_potential),
+    observed_exposures = sum(observed_exposures),
+    exposure_pct       = observed_exposures / total_potential * 100
+  )
+cat("RF overall exposure:", round(aggregated_rf$exposure_pct, 1), "%\n")
+```
+
+### 4.4 All Components Combined
+
+```{r all-exposure}
+all_combined <- bind_rows(aggregated_rf, overall_cbi, cico_overall) |>
+  summarise(
+    total_potential    = sum(total_potential),
+    observed_exposures = sum(observed_exposures),
+    exposure_pct       = observed_exposures / total_potential * 100
+  )
+cat("Overall exposure across all components:", round(all_combined$exposure_pct, 1), "%\n")
+```
+
+---
+
+## 5. Export
+
+```{r export}
+# Fidelity metrics
+write_xlsx(
+  list(
+    "CICO AM"       = final_cico_am,
+    "CICO Daytime"  = final_cico_dt,
+    "CICO PM"       = final_cico_pm,
+    "CBI Lessons"   = final_cbi,
+    "RF Meeting 1"  = final_rf_1,
+    "RF Meeting 2"  = final_rf_2,
+    "RF Meeting 3"  = final_rf_3
+  ),
+  path = "outputs/REP_Fidelity_Measures.xlsx"
+)
+
+# Exposure results
+write_xlsx(
+  list(
+    "CICO AM - Student"          = exp_am_student,
+    "CICO DT - Student"          = exp_dt_student,
+    "CICO PM - Student"          = exp_pm_student,
+    "CICO AM - Overall"          = overall_am,
+    "CICO DT - Overall"          = overall_dt,
+    "CICO PM - Overall"          = overall_pm,
+    "CICO - Overall"             = cico_overall,
+    "CBI - School"               = exp_cbi_school,
+    "CBI - Overall"              = overall_cbi,
+    "Aggregated RF Results"      = aggregated_rf,
+    "RF Meeting 1 - Overall"     = rf_overall_1,
+    "RF Meeting 2 - Overall"     = rf_overall_2,
+    "RF Meeting 3 - Overall"     = rf_overall_3,
+    "All Combined Results"       = all_combined
+  ),
+  path = "outputs/rep_exposure.xlsx"
+)
+
+cat("Outputs saved to outputs/\n")
+```
+
+---
+
+## 6. Session Info
+
+```{r session-info}
+sessionInfo()
+```

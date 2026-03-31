@@ -1,0 +1,636 @@
+---
+title: "REP 3.1 Analyses -- Descriptive Statistics, Imputation, and ANCOVA Models"
+author: "WCER School Mental Health Collaborative"
+date: "`r format(Sys.time(), '%B %d, %Y')`"
+output:
+  html_notebook:
+    df_print: paged
+    highlight: tango
+    number_sections: yes
+    theme: flatly
+    toc: yes
+    toc_float:
+      collapsed: no
+      smooth_scroll: yes
+  html_document:
+    df_print: paged
+    highlight: tango
+    number_sections: yes
+    theme: flatly
+    toc: yes
+    toc_float: yes
+---
+
+## Overview
+
+This notebook contains the primary outcome analyses for the REP 3.1 component
+analysis study. The workflow is:
+
+1. Import and clean the student-level data
+2. Parse and recode SRCS ratio fields, demographics, and condition assignment
+3. Produce descriptive statistics tables (overall and by condition) exported to Word
+4. Select the best multiple imputation predictor set for each outcome via RMSE
+5. Impute missing values using MICE
+6. Fit ANCOVA models (Post ~ Pre + Condition) for all outcomes
+7. Compute Cohen's d effect sizes for every coefficient
+8. Produce a formatted regression results table
+
+**Outcomes:** BESST (teacher/student empathy), BFS (behavior/feelings), YSR
+(youth self-report internalizing), PCOISS (parental confidence), CASSS (social
+support from classmates/teachers), SRCS (school readiness composite)
+
+**Conditions:**
+- Condition 1: CBI + CICO
+- Condition 2: CBI + RF
+- Condition 3: CBI + CICO + RF (reference = Condition 1)
+
+> **Note on data:** School names are anonymized to School_A through School_E.
+> The source data file is not included in this repository. Update the
+> `excel_file` path in the Setup chunk to point to your local copy before
+> running.
+
+---
+
+## 1. Setup
+
+```{r setup, message=FALSE, warning=FALSE}
+packages <- c("readxl", "tidyverse", "ggplot2", "stringr", "purrr",
+              "mice", "corrr", "knitr", "broom", "kableExtra",
+              "lubridate", "survey", "officer", "emmeans")
+new_packages <- setdiff(packages, installed.packages()[, "Package"])
+if (length(new_packages)) install.packages(new_packages, quiet = TRUE)
+invisible(lapply(packages, library, character.only = TRUE))
+
+# Update this path to point to your local data file
+excel_file <- "data/REP_3.1_Data_Spreadsheet.xlsx"
+d <- read_excel(excel_file, col_types = "guess")
+
+cat("Rows:", nrow(d), "| Columns:", ncol(d), "\n")
+```
+
+---
+
+## 2. Data Cleaning and Recoding
+
+### 2.1 SRCS Pre/Post (ratio string to two numeric components)
+
+The SRCS variable is stored as a string like `"45 (s-1) 32 (s-2)"`. This chunk
+extracts the two subscale scores into separate numeric columns.
+
+```{r srcs-parse}
+split_srcs <- function(x) {
+  if (is.na(x) || x %in% c("", "missing")) return(c(NA_real_, NA_real_))
+  s1 <- as.numeric(str_extract(x, "\\d+(?=\\s*\\(s-1\\))"))
+  s2 <- as.numeric(str_extract(x, "\\d+(?=\\s*\\(s-2\\))"))
+  c(s1, s2)
+}
+
+d <- d |>
+  mutate(
+    split_pre  = lapply(SRCS_Pre,  split_srcs),
+    split_post = lapply(SRCS_Post, split_srcs),
+    SRCS_Pre_s1  = map_dbl(split_pre,  1),
+    SRCS_Pre_s2  = map_dbl(split_pre,  2),
+    SRCS_Post_s1 = map_dbl(split_post, 1),
+    SRCS_Post_s2 = map_dbl(split_post, 2)
+  ) |>
+  select(-split_pre, -split_post)
+
+head(d |> select(SRCS_Pre, SRCS_Pre_s1, SRCS_Pre_s2,
+                  SRCS_Post, SRCS_Post_s1, SRCS_Post_s2))
+```
+
+### 2.2 Gender
+
+```{r gender-recode}
+gender_labels <- c("1" = "Male", "2" = "Female", "3" = "Non-binary / Third gender",
+                   "4" = "Prefer to self-describe", "5" = "Prefer not to say")
+
+d <- d |>
+  mutate(Gender = recode(as.character(Gender), !!!gender_labels))
+
+d |> count(Gender) |> mutate(pct = round(n / sum(n) * 100, 1))
+```
+
+### 2.3 Student Participation
+
+```{r participation-recode}
+participation_labels <- c(
+  "1" = "Full Participation",
+  "2" = "Partial Participation",
+  "3" = "Minimal Participation"
+)
+
+d <- d |>
+  mutate(
+    Student_Participation  = recode(as.character(`Student Participation`),
+                                    !!!participation_labels),
+    Student_Participation2 = as.numeric(`Student Participation`)
+  )
+
+d |> count(Student_Participation) |> mutate(pct = round(n / sum(n) * 100, 1))
+```
+
+### 2.4 Condition
+
+```{r condition-recode}
+d <- d |>
+  mutate(Condition = case_when(
+    Condition == 1 ~ "CBI, CICO",
+    Condition == 2 ~ "CBI, RF",
+    Condition == 3 ~ "CBI, CICO, RF",
+    TRUE           ~ NA_character_
+  ))
+
+d |> count(Condition) |> mutate(pct = round(n / sum(n) * 100, 1))
+```
+
+### 2.5 School (anonymized)
+
+Real school names are replaced with coded labels at load time to protect
+participating site identities.
+
+```{r school-recode}
+school_map <- c(
+  "Black Hawk"                   = "School_A",
+  "Black Hawk Middle School"     = "School_A",
+  "Blackhawk"                    = "School_A",
+  "Blackhawk Middle School"      = "School_A",
+  "Gompers"                      = "School_B",
+  "Olson"                        = "School_C",
+  "Olson Elementary"             = "School_C",
+  "Schenk"                       = "School_D",
+  "Spring Harbor"                = "School_E",
+  "Spring Harbor Middle School"  = "School_E"
+)
+
+d <- d |>
+  mutate(School = recode(School, !!!school_map))
+
+d |> count(School) |> mutate(pct = round(n / sum(n) * 100, 1))
+```
+
+### 2.6 Race/Ethnicity
+
+```{r race-recode}
+race_labels <- c(
+  "1" = "American Indian / Alaska Native",
+  "2" = "Asian",
+  "3" = "Black / African American",
+  "4" = "Hispanic / Latino",
+  "5" = "Native Hawaiian / Pacific Islander",
+  "6" = "White",
+  "7" = "Two or more races",
+  "8" = "Other",
+  "9" = "Prefer not to say"
+)
+
+d <- d |>
+  mutate(RaceEthnicity = recode(as.character(RaceEthnicity), !!!race_labels))
+
+d |> count(RaceEthnicity) |> mutate(pct = round(n / sum(n) * 100, 1))
+```
+
+### 2.7 Date of Birth / Age
+
+```{r age}
+d <- d |>
+  mutate(
+    DOB = case_when(
+      is.na(DOB) | DOB == "unknown" ~ NA_character_,
+      TRUE ~ as.character(DOB)
+    ),
+    DOB = parse_date_time(DOB, orders = c("mdy", "ymd", "dmy")),
+    Age = as.numeric(difftime(Sys.Date(), DOB, units = "days")) / 365.25
+  )
+
+d |>
+  summarise(
+    N     = sum(!is.na(Age)),
+    Mean  = round(mean(Age, na.rm = TRUE), 1),
+    SD    = round(sd(Age, na.rm = TRUE), 1),
+    Min   = round(min(Age, na.rm = TRUE), 1),
+    Q1    = round(quantile(Age, .25, na.rm = TRUE), 1),
+    Median= round(median(Age, na.rm = TRUE), 1),
+    Q3    = round(quantile(Age, .75, na.rm = TRUE), 1),
+    Max   = round(max(Age, na.rm = TRUE), 1)
+  )
+```
+
+---
+
+## 3. Descriptive Statistics
+
+### 3.1 Overall Sample
+
+```{r desc-overall}
+d_design <- svydesign(id = ~1, data = d, weights = NULL)
+
+categorical_vars <- c("Student_Participation", "School", "Condition",
+                       "Gender", "RaceEthnicity")
+
+continuous_vars <- c(
+  "BESST_Pre_ERI", "BESST_Pre_IRI", "BESST_Pre_ARI", "BESST_Pre_BERI",
+  "BESST_Post_ERI", "BESST_Post_IRI", "BESST_Post_ARI", "BESST_Post_BERI",
+  "BESSP_Pre_ERI", "BESSP_Pre_IRI", "BESSP_Pre_ARI", "BESSP_Pre_BERI",
+  "BESSP_Post_ERI", "BESSP_Post_IRI", "BESSP_Post_ARI", "BESSP_Post_BERI",
+  "BFSs_Pre_INT", "BFSs_Pre_EXT", "BFSs_Pre_TOT",
+  "BFSc_Pre_INT", "BFSc_Pre_EXT", "BFSc_Pre_TOT",
+  "BFSc_Post_INT", "BFSc_Post_EXT", "BFSc_Post_TOT",
+  "YSR_Pre_INT", "YSR_Post_INT",
+  "PCOISS_Pre", "PCOISS_Post",
+  "CASSS_C_Pre", "CASSS_T_Pre", "CASSS_C_Post", "CASSS_T_Post",
+  "BFSs_Post_INT", "BFSs_Post_EXT", "BFSs_Post_TOT",
+  "SRCS_Pre_s1", "SRCS_Pre_s2", "SRCS_Post_s1", "SRCS_Post_s2"
+)
+
+# Categorical frequency table
+calc_pct <- function(var) {
+  prop <- svytable(as.formula(paste("~", var)), d_design)
+  data.frame(
+    Variable   = var,
+    Level      = names(prop),
+    Count      = as.numeric(prop),
+    Percentage = round(as.numeric(prop / sum(prop) * 100), 2)
+  ) |> arrange(desc(Count))
+}
+
+categorical_summary <- bind_rows(lapply(categorical_vars, calc_pct))
+
+# Continuous summary
+calc_cont <- function(var, design) {
+  x <- na.omit(design$variables[[var]])
+  data.frame(
+    Variable = var, N = length(x),
+    Mean = round(mean(x), 2), SD = round(sd(x), 2),
+    Min = round(min(x), 2), Q1 = round(quantile(x, .25), 2),
+    Median = round(median(x), 2), Q3 = round(quantile(x, .75), 2),
+    Max = round(max(x), 2)
+  )
+}
+
+continuous_summary <- bind_rows(
+  lapply(intersect(continuous_vars, names(d)), calc_cont, design = d_design)
+)
+
+# Export to Word
+doc <- read_docx() |>
+  body_add_par("Descriptive Statistics Report", style = "heading 1") |>
+  body_add_par("Categorical Variables", style = "heading 2") |>
+  body_add_table(categorical_summary) |>
+  body_add_par("Continuous Variables", style = "heading 2") |>
+  body_add_table(continuous_summary)
+print(doc, target = "outputs/Descriptive_Statistics_Report.docx")
+cat("Saved: outputs/Descriptive_Statistics_Report.docx\n")
+```
+
+### 3.2 By Condition
+
+```{r desc-by-condition}
+calc_cont_by_cond <- function(var, design) {
+  results <- lapply(unique(na.omit(d$Condition)), function(cond) {
+    x <- na.omit(design$variables[[var]][d$Condition == cond])
+    data.frame(
+      Variable = var, Condition = cond, N = length(x),
+      Q1 = round(quantile(x, .25), 2), Mean = round(mean(x), 2),
+      Median = round(median(x), 2), Q3 = round(quantile(x, .75), 2),
+      Min = round(min(x), 2), Max = round(max(x), 2)
+    )
+  })
+  bind_rows(results)
+}
+
+continuous_by_cond <- bind_rows(
+  lapply(intersect(continuous_vars, names(d)), calc_cont_by_cond, design = d_design)
+)
+
+doc2 <- read_docx() |>
+  body_add_par("Descriptive Statistics by Condition", style = "heading 1") |>
+  body_add_par("Continuous Variables", style = "heading 2") |>
+  body_add_table(continuous_by_cond)
+print(doc2, target = "outputs/Descriptive_Statistics_Report_Condition.docx")
+cat("Saved: outputs/Descriptive_Statistics_Report_Condition.docx\n")
+```
+
+---
+
+## 4. Multiple Imputation
+
+### 4.1 Imputation predictor selection via RMSE
+
+For each outcome, we search over combinations of up to 3 predictors and select
+the set that minimizes RMSE on 10% of artificially masked values.
+
+```{r imputation-setup}
+# Base dataset for imputation modelling
+data <- d |>
+  select(
+    BESST_Post_IRI, BESST_Pre_IRI,
+    BFSs_Post_INT,  BFSs_Pre_INT,
+    YSR_Post_INT,   YSR_Pre_INT,
+    PCOISS_Post,    PCOISS_Pre,
+    CASSS_C_Post,   CASSS_C_Pre,
+    CASSS_T_Post,   CASSS_T_Pre,
+    SRCS_Pre_s1, SRCS_Pre_s2, SRCS_Post_s1, SRCS_Post_s2,
+    Condition, Gender,
+    BESSP_Pre_IRI, BESSP_Post_IRI,
+    Student_Participation, Student_Participation2
+  ) |>
+  mutate(
+    Gender                = as.factor(Gender),
+    Condition             = as.factor(Condition),
+    Student_Participation = as.factor(Student_Participation)
+  )
+
+# Shared helpers
+generate_combinations <- function(predictors, min_size, max_size) {
+  combs <- list()
+  for (size in min_size:max_size)
+    combs <- c(combs, lapply(combn(predictors, size, simplify = FALSE),
+                             paste, collapse = ", "))
+  combs
+}
+
+calculate_rmse <- function(original, imputed)
+  sqrt(mean((original - imputed)^2, na.rm = TRUE))
+
+run_rmse <- function(data, dv, predictor_sets) {
+  results <- sapply(names(predictor_sets), function(sn) {
+    preds <- predictor_sets[[sn]]
+    ds <- data |> select(all_of(c(preds, dv)))
+    set.seed(123)
+    idx <- sample(seq_len(nrow(ds)), floor(0.1 * nrow(ds)))
+    ds[[dv]][idx] <- NA
+    imp <- mice(ds, m = 5, method = "pmm", seed = 123, printFlag = FALSE)
+    comp <- complete(imp)
+    calculate_rmse(data[[dv]][idx], comp[[dv]][idx])
+  })
+  tibble(Set = names(results), RMSE = results)
+}
+
+build_sets <- function(predictors) {
+  base <- as.list(setNames(as.list(predictors), paste0("set", seq_along(predictors))))
+  combs <- generate_combinations(predictors, 2, 3)
+  extra <- lapply(combs, \(x) strsplit(x, ", ")[[1]])
+  extra_named <- setNames(extra, paste0("set", seq(length(base) + 1,
+                                                    length(base) + length(extra))))
+  c(base, extra_named)
+}
+```
+
+```{r impute-besst, warning=FALSE, message=FALSE}
+preds_besst <- c("Gender", "BESSP_Pre_IRI", "BFSs_Pre_INT", "PCOISS_Pre",
+                  "CASSS_C_Pre", "CASSS_T_Pre", "Student_Participation",
+                  "YSR_Pre_INT", "SRCS_Pre_s1", "SRCS_Pre_s2")
+sets_besst  <- build_sets(preds_besst)
+rmse_besst  <- run_rmse(data, "BESST_Pre_IRI", sets_besst)
+best_besst  <- sets_besst[[rmse_besst$Set[which.min(rmse_besst$RMSE)]]]
+cat("Best BESST predictors:", paste(best_besst, collapse = ", "), "\n")
+
+imp_besst <- mice(data |> select(all_of(c(best_besst, "BESST_Pre_IRI"))),
+                  m = 5, method = "pmm", seed = 123, printFlag = FALSE)
+data <- data |>
+  mutate(Imputed_BESST_Pre_IRI = ifelse(
+    is.na(BESST_Pre_IRI), complete(imp_besst)$BESST_Pre_IRI, BESST_Pre_IRI))
+```
+
+```{r impute-all-outcomes, warning=FALSE, message=FALSE}
+# Helper: impute one variable given best predictor set
+impute_var <- function(data, dv, predictors) {
+  preds <- build_sets(predictors)
+  rmse  <- run_rmse(data, dv, preds)
+  best  <- preds[[rmse$Set[which.min(rmse$RMSE)]]]
+  cat(dv, "-- best predictors:", paste(best, collapse = ", "), "\n")
+  imp <- mice(data |> select(all_of(c(best, dv))),
+              m = 5, method = "pmm", seed = 123, printFlag = FALSE)
+  list(data = data |> mutate(
+    !!paste0("Imputed_", dv) := ifelse(
+      is.na(.data[[dv]]), complete(imp)[[dv]], .data[[dv]])
+  ), best_predictors = best)
+}
+
+shared_preds <- c("Gender", "BFSs_Pre_INT", "PCOISS_Pre", "CASSS_C_Pre",
+                   "CASSS_T_Pre", "Student_Participation", "SRCS_Pre_s1",
+                   "SRCS_Pre_s2", "BESSP_Pre_IRI", "BESST_Pre_IRI")
+
+for (dv in c("BFSs_Pre_INT", "YSR_Pre_INT", "PCOISS_Pre",
+             "CASSS_C_Pre", "CASSS_T_Pre",
+             "BESST_Post_IRI", "BFSs_Post_INT", "YSR_Post_INT",
+             "PCOISS_Post", "CASSS_C_Post", "CASSS_T_Post",
+             "SRCS_Post_s1", "SRCS_Post_s2", "BESSP_Post_IRI")) {
+  preds_dv <- setdiff(shared_preds, dv)
+  result   <- impute_var(data, dv, preds_dv)
+  data     <- result$data
+}
+
+# Combine imputed data with full dataset
+data_combined <- d |>
+  select(-any_of(names(data))) |>
+  bind_cols(data) |>
+  rename(
+    Imputed_CASSSC_Pre  = Imputed_CASSS_C_Pre,
+    Imputed_CASSSC_Post = Imputed_CASSS_C_Post,
+    Imputed_CASSST_Pre  = Imputed_CASSS_T_Pre,
+    Imputed_CASSST_Post = Imputed_CASSS_T_Post,
+    Imputed_SRCSs1_Post = Imputed_SRCS_Post_s1,
+    Imputed_SRCSs1_Pre  = Imputed_SRCS_Pre_s1,
+    Imputed_SRCSs2_Pre  = Imputed_SRCS_Pre_s2,
+    Imputed_SRCSs2_Post = Imputed_SRCS_Post_s2
+  )
+```
+
+---
+
+## 5. ANCOVA Models -- Post ~ Pre + Condition
+
+### 5.1 Model specifications
+
+```{r model-specs}
+dv_list <- list(
+  list(dv = "Imputed_BESST_Post_IRI", pre = "Imputed_BESST_Pre_IRI"),
+  list(dv = "Imputed_BFSs_Post_INT",  pre = "Imputed_BFSs_Pre_INT"),
+  list(dv = "Imputed_YSR_Post_INT",   pre = "Imputed_YSR_Pre_INT"),
+  list(dv = "Imputed_PCOISS_Post",    pre = "Imputed_PCOISS_Pre"),
+  list(dv = "Imputed_CASSSC_Post",    pre = "Imputed_CASSSC_Pre"),
+  list(dv = "Imputed_CASSST_Post",    pre = "Imputed_CASSST_Pre"),
+  list(dv = "Imputed_SRCSs1_Post",    pre = "Imputed_SRCSs1_Pre"),
+  list(dv = "Imputed_SRCSs2_Post",    pre = "Imputed_SRCSs2_Pre"),
+  list(dv = "Imputed_BESSP_Post_IRI", pre = "Imputed_BESSP_Pre_IRI")
+)
+```
+
+### 5.2 Fit models and compute Cohen's d
+
+Cohen's d for each coefficient is computed as `b_j / sigma(model)`, where sigma
+is the model residual SD. For the Condition coefficients this gives an adjusted
+mean-difference effect size in outcome SD units.
+
+```{r fit-models, warning=FALSE}
+# Validate and prep data for one model
+prep_model_data <- function(dv, pre, data) {
+  required <- c(dv, pre, "Condition")
+  missing_cols <- setdiff(required, names(data))
+  if (length(missing_cols) > 0)
+    stop(paste("Missing columns:", paste(missing_cols, collapse = ", ")))
+  df <- data |>
+    select(all_of(required)) |>
+    filter(if_all(everything(), ~ !is.na(.))) |>
+    mutate(Condition = as.factor(Condition))
+  if (nrow(df) < 10)
+    stop(paste("Too few rows after NA removal for", dv))
+  df
+}
+
+# Run one ANCOVA and return tidy results + Cohen's d
+run_ancova <- function(dv, pre, data) {
+  df      <- prep_model_data(dv, pre, data)
+  formula <- as.formula(paste(dv, "~", pre, "+ Condition"))
+  model   <- lm(formula, data = df)
+  sigma   <- sigma(model)
+  n       <- nrow(df)
+
+  tidy(model, conf.int = TRUE) |>
+    mutate(
+      DV           = dv,
+      Pre          = pre,
+      Sample_Size  = n,
+      Residual_SD  = sigma,
+      Cohens_d     = estimate / sigma,
+      Cohens_d_low = conf.low / sigma,
+      Cohens_d_high= conf.high / sigma
+    )
+}
+
+# Fit all models
+all_results <- lapply(dv_list, function(spec) {
+  tryCatch(
+    run_ancova(spec$dv, spec$pre, data_combined),
+    error = function(e) {
+      warning(paste("Model failed for", spec$dv, ":", e$message))
+      NULL
+    }
+  )
+})
+
+coef_table <- bind_rows(Filter(Negate(is.null), all_results))
+
+# Print summary
+cat("\nCoefficient table with Cohen's d for all models:\n")
+print(coef_table |> select(DV, term, estimate, p.value, Cohens_d, Sample_Size))
+```
+
+### 5.3 Export effect size table
+
+```{r export-effects}
+write.csv(coef_table, "outputs/cohens_d_all_coefficients.csv", row.names = FALSE)
+cat("Saved: outputs/cohens_d_all_coefficients.csv\n")
+```
+
+---
+
+## 6. Regression Results Table (Formatted)
+
+```{r regression-table, warning=FALSE}
+regression_results <- lapply(dv_list, function(spec) {
+  df  <- tryCatch(prep_model_data(spec$dv, spec$pre, data_combined), error = \(e) NULL)
+  if (is.null(df)) return(NULL)
+  mod <- lm(as.formula(paste(spec$dv, "~", spec$pre, "+ Condition")), data = df)
+  tidy(mod, conf.int = TRUE) |>
+    mutate(Model = spec$dv, N = nrow(df),
+           sig = case_when(p.value < .001 ~ "***",
+                           p.value < .01  ~ "**",
+                           p.value < .05  ~ "*",
+                           p.value < .10  ~ ".",
+                           TRUE           ~ ""))
+})
+
+reg_df <- bind_rows(Filter(Negate(is.null), regression_results)) |>
+  mutate(across(where(is.numeric), ~ round(., 3)))
+
+reg_df |>
+  kable(caption = "ANCOVA Regression Results -- Post ~ Pre + Condition") |>
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"),
+                full_width = FALSE)
+```
+
+---
+
+## 7. Visualizations
+
+### 7.1 Mean scores by time (pre/post) and condition
+
+```{r mean-scores-plot, fig.width=14, fig.height=8}
+mean_scores <- data_combined |>
+  pivot_longer(cols = starts_with("Imputed_"),
+               names_to = "Score_Type", values_to = "Score") |>
+  separate(Score_Type, into = c("Prefix", "Measure", "Time"),
+           sep = "_", extra = "merge") |>
+  filter(Time %in% c("Pre", "Post")) |>
+  group_by(Condition, Measure, Time) |>
+  summarise(
+    Mean_Score = mean(Score, na.rm = TRUE),
+    SD_Score   = sd(Score, na.rm = TRUE),
+    N          = sum(!is.na(Score)),
+    SE         = SD_Score / sqrt(N),
+    .groups = "drop"
+  ) |>
+  mutate(
+    Time      = factor(Time, levels = c("Pre", "Post")),
+    Condition = factor(Condition, levels = c("CBI, CICO", "CBI, RF", "CBI, CICO, RF"))
+  )
+
+# Filter to primary outcomes for cleaner plot
+primary_measures <- c("BFSs", "YSR", "BESST", "PCOISS", "CASSSC", "CASSST")
+
+plot_primary <- mean_scores |>
+  filter(Measure %in% primary_measures) |>
+  ggplot(aes(x = Time, y = Mean_Score,
+             color = Condition, group = Condition)) +
+  geom_line(linewidth = 0.8) +
+  geom_point(size = 2) +
+  geom_errorbar(aes(ymin = Mean_Score - SE, ymax = Mean_Score + SE),
+                width = 0.1, alpha = 0.6) +
+  facet_wrap(~ Measure, scales = "free_y") +
+  scale_color_brewer(palette = "Set1") +
+  labs(title = "Mean Scores by Condition and Time (Pre/Post)",
+       x = "Time Point", y = "Mean Score", color = "Condition") +
+  theme_minimal(base_size = 12) +
+  theme(legend.position = "bottom",
+        axis.text.x = element_text(angle = 45, hjust = 1))
+
+ggsave("figures/mean_scores_by_time_with_error_bars.png",
+       plot = plot_primary, width = 14, height = 8, dpi = 150)
+print(plot_primary)
+```
+
+### 7.2 Descriptive statistics by condition (post-imputation)
+
+```{r desc-post-imputation}
+d_design_imp <- svydesign(id = ~1, data = data_combined, weights = NULL)
+
+post_vars <- c("Imputed_BESST_Post_IRI", "Imputed_BFSs_Post_INT",
+               "Imputed_YSR_Post_INT",   "Imputed_PCOISS_Post",
+               "Imputed_CASSSC_Post",    "Imputed_CASSST_Post",
+               "Imputed_SRCSs1_Post",    "Imputed_SRCSs2_Post")
+
+post_by_cond <- bind_rows(lapply(
+  intersect(post_vars, names(data_combined)),
+  calc_cont_by_cond, design = d_design_imp
+))
+
+doc3 <- read_docx() |>
+  body_add_par("Descriptive Statistics by Condition -- Post-Imputation",
+               style = "heading 1") |>
+  body_add_par("Posttest Outcomes by Condition", style = "heading 2") |>
+  body_add_table(post_by_cond)
+print(doc3, target = "outputs/Descriptive_Statistics_Report_Condition_Post.docx")
+cat("Saved: outputs/Descriptive_Statistics_Report_Condition_Post.docx\n")
+```
+
+---
+
+## 8. Session Info
+
+```{r session-info}
+sessionInfo()
+```
