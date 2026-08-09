@@ -1,0 +1,33 @@
+Target,Predictors_Tested,Significant_Associations,Minimum_P_Value,Significant_Predictors,Interpretation
+post_CASSS_caregiver,18,1,0.023766098045345324,gender,"Missingness was associated with observed variables in the imputation model. This is consistent with an MAR-based approach, although MAR cannot be proven."
+post_CASSS_teacher,18,1,0.023766098045345324,gender,"Missingness was associated with observed variables in the imputation model. This is consistent with an MAR-based approach, although MAR cannot be proven."
+post_PCOISS,18,1,0.023766098045345324,gender,"Missingness was associated with observed variables in the imputation model. This is consistent with an MAR-based approach, although MAR cannot be proven."
+post_SRCS_final,18,1,0.023766098045345324,gender,"Missingness was associated with observed variables in the imputation model. This is consistent with an MAR-based approach, although MAR cannot be proven."
+post_YSR_Anxious_Depressed,18,1,0.023766098045345324,gender,"Missingness was associated with observed variables in the imputation model. This is consistent with an MAR-based approach, although MAR cannot be proven."
+post_YSR_InternalizingProblems,18,1,0.023766098045345324,gender,"Missingness was associated with observed variables in the imputation model. This is consistent with an MAR-based approach, although MAR cannot be proven."
+post_YSR_SocialProblems,18,1,0.023766098045345324,gender,"Missingness was associated with observed variables in the imputation model. This is consistent with an MAR-based approach, although MAR cannot be proven."
+post_YSR_SomaticComplaints,18,1,0.023766098045345324,gender,"Missingness was associated with observed variables in the imputation model. This is consistent with an MAR-based approach, although MAR cannot be proven."
+post_YSR_Withdrawn_Depressed,18,1,0.023766098045345324,gender,"Missingness was associated with observed variables in the imputation model. This is consistent with an MAR-based approach, although MAR cannot be proven."
+post_student_BFS_externalizing,18,1,0.023766098045345324,gender,"Missingness was associated with observed variables in the imputation model. This is consistent with an MAR-based approach, although MAR cannot be proven."
+post_student_BFS_internalizing,18,1,0.023766098045345324,gender,"Missingness was associated with observed variables in the imputation model. This is consistent with an MAR-based approach, although MAR cannot be proven."
+post_student_BFS_total,18,1,0.023766098045345324,gender,"Missingness was associated with observed variables in the imputation model. This is consistent with an MAR-based approach, although MAR cannot be proven."
+post_teacher_BESS_ARI,26,2,0.018608919267930863,post_YSR_Withdrawn_Depressed; post_YSR_SocialProblems,"Missingness was associated with observed variables in the imputation model. This is consistent with an MAR-based approach, although MAR cannot be proven."
+post_teacher_BESS_BERI,26,2,0.018608919267930863,post_YSR_Withdrawn_Depressed; post_YSR_SocialProblems,"Missingness was associated with observed variables in the imputation model. This is consistent with an MAR-based approach, although MAR cannot be proven."
+post_teacher_BESS_ERI,26,2,0.018608919267930863,post_YSR_Withdrawn_Depressed; post_YSR_SocialProblems,"Missingness was associated with observed variables in the imputation model. This is consistent with an MAR-based approach, although MAR cannot be proven."
+post_teacher_BESS_IRI,26,2,0.018608919267930863,post_YSR_Withdrawn_Depressed; post_YSR_SocialProblems,"Missingness was associated with observed variables in the imputation model. This is consistent with an MAR-based approach, although MAR cannot be proven."
+pre_CASSS_caregiver,22,0,0.07195821369154046,NA,No significant associations were detected. This does not prove MCAR or rule out MAR.
+pre_CASSS_teacher,22,0,0.07195821369154046,NA,No significant associations were detected. This does not prove MCAR or rule out MAR.
+pre_PCOISS,22,0,0.07195821369154046,NA,No significant associations were detected. This does not prove MCAR or rule out MAR.
+pre_SRCS_final,22,0,0.07195821369154046,NA,No significant associations were detected. This does not prove MCAR or rule out MAR.
+pre_YSR_Anxious_Depressed,22,0,0.07195821369154046,NA,No significant associations were detected. This does not prove MCAR or rule out MAR.
+pre_YSR_InternalizingProblems,22,0,0.07195821369154046,NA,No significant associations were detected. This does not prove MCAR or rule out MAR.
+pre_YSR_SocialProblems,22,0,0.07195821369154046,NA,No significant associations were detected. This does not prove MCAR or rule out MAR.
+pre_YSR_SomaticComplaints,22,0,0.07195821369154046,NA,No significant associations were detected. This does not prove MCAR or rule out MAR.
+pre_YSR_Withdrawn_Depressed,22,0,0.07195821369154046,NA,No significant associations were detected. This does not prove MCAR or rule out MAR.
+pre_student_BFS_externalizing,22,0,0.07195821369154046,NA,No significant associations were detected. This does not prove MCAR or rule out MAR.
+pre_student_BFS_internalizing,22,0,0.07195821369154046,NA,No significant associations were detected. This does not prove MCAR or rule out MAR.
+pre_student_BFS_total,22,0,0.07195821369154046,NA,No significant associations were detected. This does not prove MCAR or rule out MAR.
+pre_teacher_BESS_ARI,30,2,0.0244358935604656,post_YSR_Withdrawn_Depressed; post_YSR_SocialProblems,"Missingness was associated with observed variables in the imputation model. This is consistent with an MAR-based approach, although MAR cannot be proven."
+pre_teacher_BESS_BERI,30,2,0.0244358935604656,post_YSR_Withdrawn_Depressed; post_YSR_SocialProblems,"Missingness was associated with observed variables in the imputation model. This is consistent with an MAR-based approach, although MAR cannot be proven."
+pre_teacher_BESS_ERI,30,2,0.0244358935604656,post_YSR_Withdrawn_Depressed; post_YSR_SocialProblems,"Missingness was associated with observed variables in the imputation model. This is consistent with an MAR-based approach, although MAR cannot be proven."
+pre_teacher_BESS_IRI,30,2,0.0244358935604656,post_YSR_Withdrawn_Depressed; post_YSR_SocialProblems,"Missingness was associated with observed variables in the imputation model. This is consistent with an MAR-based approach, although MAR cannot be proven."

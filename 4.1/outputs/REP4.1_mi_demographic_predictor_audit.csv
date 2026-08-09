@@ -1,0 +1,6 @@
+Variable,Role
+gender,Included demographic predictor
+condition,"Included study design predictor, not demographic"
+birthdate,Not included in MI predictor pools
+school,Not included in MI predictor pools
+state,Not included in MI predictor pools

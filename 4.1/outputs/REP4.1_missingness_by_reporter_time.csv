@@ -1,0 +1,5 @@
+Reporter,Timepoint,Variables_Summarized,Min_Missing_Pct,Max_Missing_Pct,Mean_Missing_Pct,SD_Missing_Pct
+Student,Post,12,10,10,10,0
+Student,Pre,12,13.75,13.75,13.75,0
+Teacher,Post,4,33.75,33.75,33.75,0
+Teacher,Pre,4,36.25,36.25,36.25,0

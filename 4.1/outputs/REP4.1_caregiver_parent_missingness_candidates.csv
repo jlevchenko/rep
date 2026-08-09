@@ -1,0 +1,37 @@
+Variable,Total_N,Observed_N,Missing_N,Missing_Pct
+post_caregiver_BESS_ARI,80,15,65,81.25
+post_caregiver_BESS_BERI,80,15,65,81.25
+post_caregiver_BESS_ERI,80,15,65,81.25
+post_caregiver_BESS_IRI,80,15,65,81.25
+pre_caregiver_BESS_ARI,80,27,53,66.25
+pre_caregiver_BESS_BERI,80,27,53,66.25
+pre_caregiver_BESS_ERI,80,27,53,66.25
+pre_caregiver_BESS_IRI,80,27,53,66.25
+post_CBCL_Anxious_Depressed,80,44,36,45
+post_CBCL_Internalizing Problems,80,44,36,45
+post_CBCL_SocialProblems,80,44,36,45
+post_CBCL_SomaticComplaints,80,44,36,45
+post_CBCL_Withdrawn_Depressed,80,44,36,45
+post_PTRSII,80,44,36,45
+post_caregiver_BFS_externalizing,80,44,36,45
+post_caregiver_BFS_internalizing,80,44,36,45
+post_caregiver_BFS_total,80,44,36,45
+post_caregiver_skills_ParentalWarmth,80,44,36,45
+post_caregiver_skills_PositiveParenting,80,44,36,45
+post_caregiver_skills_ProblematicScaleNotes,80,44,36,45
+pre_CBCL_Anxious_Depressed,80,57,23,28.75
+pre_CBCL_Internalizing Problems,80,57,23,28.75
+pre_CBCL_SocialProblems,80,57,23,28.75
+pre_CBCL_SomaticComplaints,80,57,23,28.75
+pre_CBCL_Withdrawn_Depressed,80,57,23,28.75
+pre_PTRSII,80,57,23,28.75
+pre_caregiver_BFS_externalizing,80,57,23,28.75
+pre_caregiver_BFS_internalizing,80,57,23,28.75
+pre_caregiver_BFS_total,80,57,23,28.75
+pre_caregiver_skills_ParentalWarmth,80,57,23,28.75
+pre_caregiver_skills_PositiveParenting,80,57,23,28.75
+pre_caregiver_skills_ProblematicScaleNotes,80,57,23,28.75
+pre_CASSS_caregiver,80,69,11,13.75
+post_CASSS_caregiver,80,72,8,10
+Imputed_post_CASSS_caregiver,80,80,0,0
+Imputed_pre_CASSS_caregiver,80,80,0,0

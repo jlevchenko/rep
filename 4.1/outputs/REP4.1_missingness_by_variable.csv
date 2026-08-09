@@ -1,0 +1,33 @@
+Reporter,Construct,Timepoint,Variable,Total_N,Observed_N,Missing_N,Missing_Pct
+Teacher,BESS IRI,Pre,pre_teacher_BESS_IRI,80,51,29,36.25
+Teacher,BESS IRI,Post,post_teacher_BESS_IRI,80,53,27,33.75
+Teacher,BESS ERI,Pre,pre_teacher_BESS_ERI,80,51,29,36.25
+Teacher,BESS ERI,Post,post_teacher_BESS_ERI,80,53,27,33.75
+Teacher,BESS ARI,Pre,pre_teacher_BESS_ARI,80,51,29,36.25
+Teacher,BESS ARI,Post,post_teacher_BESS_ARI,80,53,27,33.75
+Teacher,BESS BERI,Pre,pre_teacher_BESS_BERI,80,51,29,36.25
+Teacher,BESS BERI,Post,post_teacher_BESS_BERI,80,53,27,33.75
+Student,YSR Anxious/Depressed,Pre,pre_YSR_Anxious_Depressed,80,69,11,13.75
+Student,YSR Anxious/Depressed,Post,post_YSR_Anxious_Depressed,80,72,8,10
+Student,YSR Withdrawn/Depressed,Pre,pre_YSR_Withdrawn_Depressed,80,69,11,13.75
+Student,YSR Withdrawn/Depressed,Post,post_YSR_Withdrawn_Depressed,80,72,8,10
+Student,YSR Somatic Complaints,Pre,pre_YSR_SomaticComplaints,80,69,11,13.75
+Student,YSR Somatic Complaints,Post,post_YSR_SomaticComplaints,80,72,8,10
+Student,YSR Social Problems,Pre,pre_YSR_SocialProblems,80,69,11,13.75
+Student,YSR Social Problems,Post,post_YSR_SocialProblems,80,72,8,10
+Student,YSR Internalizing Problems,Pre,pre_YSR_InternalizingProblems,80,69,11,13.75
+Student,YSR Internalizing Problems,Post,post_YSR_InternalizingProblems,80,72,8,10
+Student,BFS Internalizing,Pre,pre_student_BFS_internalizing,80,69,11,13.75
+Student,BFS Internalizing,Post,post_student_BFS_internalizing,80,72,8,10
+Student,BFS Externalizing,Pre,pre_student_BFS_externalizing,80,69,11,13.75
+Student,BFS Externalizing,Post,post_student_BFS_externalizing,80,72,8,10
+Student,BFS Total,Pre,pre_student_BFS_total,80,69,11,13.75
+Student,BFS Total,Post,post_student_BFS_total,80,72,8,10
+Student,SRCS,Pre,pre_SRCS_final,80,69,11,13.75
+Student,SRCS,Post,post_SRCS_final,80,72,8,10
+Student,CASSS Caregiver,Pre,pre_CASSS_caregiver,80,69,11,13.75
+Student,CASSS Caregiver,Post,post_CASSS_caregiver,80,72,8,10
+Student,CASSS Teacher,Pre,pre_CASSS_teacher,80,69,11,13.75
+Student,CASSS Teacher,Post,post_CASSS_teacher,80,72,8,10
+Student,PCOISS,Pre,pre_PCOISS,80,69,11,13.75
+Student,PCOISS,Post,post_PCOISS,80,72,8,10
